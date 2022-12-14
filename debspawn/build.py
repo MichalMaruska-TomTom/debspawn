@@ -54,6 +54,7 @@ from .utils.misc import (
 )
 from .utils.command import safe_run
 
+BUILD_DIR = '/srv/build'
 
 class BuildError(Exception):
     """Package build failed with a generic error."""
@@ -89,12 +90,12 @@ def interact_with_build_environment(
     print_info('Press CTL+D to exit the interactive shell.')
     print()
 
-    nspawn_flags = ['--bind={}:/srv/build/'.format(pkg_dir_root)]
+    nspawn_flags = ['--bind={}:{}/'.format(pkg_dir_root, BUILD_DIR)]
     nspawn_run_persist(
         osbase,
         instance_dir,
         machine_name,
-        chdir=os.path.join('/srv/build', os.path.basename(pkg_dir)),
+        chdir=os.path.join(BUILD_DIR, os.path.basename(pkg_dir)),
         flags=nspawn_flags,
         tmp_apt_cache_dir=aptcache_tmp,
         pkginjector=pkginjector,
@@ -127,7 +128,7 @@ def interact_with_build_environment(
                 osbase,
                 instance_dir,
                 machine_name,
-                chdir=os.path.join('/srv/build', os.path.basename(pkg_dir)),
+                chdir=os.path.join(BUILD_DIR, os.path.basename(pkg_dir)),
                 flags=nspawn_flags,
                 command=['dpkg-buildpackage', '-T', 'clean'],
                 tmp_apt_cache_dir=aptcache_tmp,
@@ -232,7 +233,7 @@ def internal_execute_build(
                 pkginjector.create_instance_repo(os.path.join(pkgsync_tmp, 'pkginject'))
 
             # set up the build environment
-            nspawn_flags = ['--bind={}:/srv/build/'.format(pkg_dir)]
+            nspawn_flags = ['--bind={}:{}/'.format(pkg_dir, BUILD_DIR)]
             prep_flags = ['--build-prepare']
 
             # if we force a suite and have injected packages, the injected packages
@@ -258,7 +259,7 @@ def internal_execute_build(
                 return False
 
             # run the actual build. At this point, code is less trusted, and we disable network access.
-            nspawn_flags = ['--bind={}:/srv/build/'.format(pkg_dir), '-u', 'builder', '--private-network']
+            nspawn_flags = ['--bind={}:{}/'.format(pkg_dir, BUILD_DIR), '-u', 'builder', '--private-network']
             helper_flags = ['--build-run']
             helper_flags.extend(['--suite', osbase.suite])
             if buildflags:
@@ -284,7 +285,7 @@ def internal_execute_build(
                 # running Lintian was requested, so do so.
                 # we use Lintian from the container, so we validate with the validator from
                 # the OS the package was actually built against
-                nspawn_flags = ['--bind={}:/srv/build/'.format(pkg_dir)]
+                nspawn_flags = ['--bind={}:{}/'.format(pkg_dir, BUILD_DIR)]
                 r = nspawn_run_helper_persist(
                     osbase,
                     instance_dir,
