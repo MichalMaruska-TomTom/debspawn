@@ -195,6 +195,9 @@ def _execute_sdnspawn(
     # add custom parameters
     cmd.extend(parameters)
 
+    print("nspawn -> Popen?: ", file=sys.stderr, end='')
+    print(" ".join(cmd), file=sys.stderr)
+
     if nowait:
         return subprocess.Popen(cmd, shell=False, stdin=subprocess.DEVNULL)
     else:
@@ -409,6 +412,7 @@ def nspawn_run_helper_ephemeral(
     private_users: bool = False,
 ):
     cmd = nspawn_make_helper_cmd(helper_flags, build_uid)
+    print(" ".join(cmd), file=sys.stderr)
     return nspawn_run_ephemeral(
         base_dir,
         machine_name,
