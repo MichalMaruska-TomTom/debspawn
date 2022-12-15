@@ -133,8 +133,19 @@ def eatmydata():
         del os.environ['LD_PRELOAD']
 
 
+def source_local_reprepro(distro):
+    return "deb http://localhost/~michal/reprepro {} main\n".format(distro)
+
+def install_my_sources():
+    source = "/etc/apt/sources.list.d/maruska-local.list"
+    if (not os.path.exists(source)):
+        with open(source, 'w') as f:
+            f.write(source_local_reprepro("focal"))
+            f.write(source_local_reprepro("release"))
+
 def update_container(builder_uid):
     with eatmydata():
+        install_my_sources()
         run_apt_command('update')
         run_apt_command('full-upgrade')
 
