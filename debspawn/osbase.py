@@ -239,6 +239,12 @@ class OSBase:
 
         os.chmod(script_fname, 0o0755)
 
+    def copy_signature_file(self, osroot_path):
+        source = "/usr/local/share/keyrings/maruska.gpg"
+        target = os.path.join(osroot_path, 'etc/apt/trusted.gpg.d')
+        Path(target).mkdir(parents=True, exist_ok=True)
+        shutil.copy(source, target)
+
     def get_image_location(self):
         return os.path.join(self._gconf.osroots_dir, '{}.tar.zst'.format(self.name))
 
@@ -505,6 +511,7 @@ class OSBase:
 
             # create helper script runner
             self._copy_helper_script(tdir)
+            self.copy_signature_file(tdir)
 
             # if we bootstrapped the base suite, add the primary suite to
             # sources.list. We also add any explicit extra suites and source lines
@@ -743,6 +750,7 @@ class OSBase:
         with self.new_instance() as (instance_dir, _):
             # ensure helper script runner exists and is up to date
             self._copy_helper_script(instance_dir)
+            self.copy_signature_file(instance_dir)
 
             print_section('Update')
             if (

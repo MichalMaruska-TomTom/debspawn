@@ -23,6 +23,7 @@ import subprocess
 from glob import glob
 from collections.abc import Iterable
 
+from contextlib import nullcontext
 from .nspawn import nspawn_run_persist, nspawn_run_helper_persist
 from .injectpkg import PackageInjector
 from .utils.env import (
@@ -54,17 +55,26 @@ from .utils.misc import (
 )
 from .utils.command import safe_run
 
+BUILD_DIR = '/srv/build'
 
 class BuildError(Exception):
     """Package build failed with a generic error."""
 
+
+# I need a temporary dir on the host.
+#
+def bind_mount_flags(pkg_dir, source_pkg_dir):
+    # new layout:
+    return ['--bind={}:{}'.format(pkg_dir, BUILD_DIR),
+     '--bind={}:{}/package'.format(source_pkg_dir, BUILD_DIR),
+     ]
 
 def interact_with_build_environment(
     osbase,
     instance_dir,
     machine_name,
     *,
-    pkg_dir_root,
+    pkg_dir_root, # mmc: what's the difference?
     source_pkg_dir,
     aptcache_tmp,
     pkginjector,
@@ -73,11 +83,7 @@ def interact_with_build_environment(
     '''Launch an interactive shell in the build environment'''
 
     # find the right directory to switch to
-    pkg_dir = pkg_dir_root
-    for f in glob(os.path.join(pkg_dir, '*')):
-        if os.path.isdir(f):
-            pkg_dir = f
-            break
+    pkg_dir = BUILD_DIR
 
     print()
     print_info('Launching interactive shell in build environment.')
@@ -89,12 +95,12 @@ def interact_with_build_environment(
     print_info('Press CTL+D to exit the interactive shell.')
     print()
 
-    nspawn_flags = ['--bind={}:/srv/build/'.format(pkg_dir_root)]
+    nspawn_flags = bind_mount_flags(pkg_dir_root, source_pkg_dir)
     nspawn_run_persist(
         osbase,
         instance_dir,
         machine_name,
-        chdir=os.path.join('/srv/build', os.path.basename(pkg_dir)),
+        chdir=BUILD_DIR, # os.path.join(BUILD_DIR, os.path.basename(pkg_dir)),
         flags=nspawn_flags,
         tmp_apt_cache_dir=aptcache_tmp,
         pkginjector=pkginjector,
@@ -127,7 +133,7 @@ def interact_with_build_environment(
                 osbase,
                 instance_dir,
                 machine_name,
-                chdir=os.path.join('/srv/build', os.path.basename(pkg_dir)),
+                chdir=os.path.join(BUILD_DIR, os.path.basename(pkg_dir)),
                 flags=nspawn_flags,
                 command=['dpkg-buildpackage', '-T', 'clean'],
                 tmp_apt_cache_dir=aptcache_tmp,
@@ -199,7 +205,7 @@ def internal_execute_build(
     '''Perform the actual build on an extracted package directory'''
     assert not build_only or isinstance(build_only, str)
     if not pkg_dir:
-        raise ValueError('Package directory is missing!')
+        raise ValueError('directory for artifacts is missing!') # Package
     pkg_dir = os.path.normpath(pkg_dir)
     if not build_env:
         build_env = {}
@@ -232,7 +238,7 @@ def internal_execute_build(
                 pkginjector.create_instance_repo(os.path.join(pkgsync_tmp, 'pkginject'))
 
             # set up the build environment
-            nspawn_flags = ['--bind={}:/srv/build/'.format(pkg_dir)]
+            nspawn_flags = bind_mount_flags(pkg_dir, source_pkg_dir)
             prep_flags = ['--build-prepare']
 
             # if we force a suite and have injected packages, the injected packages
@@ -258,7 +264,8 @@ def internal_execute_build(
                 return False
 
             # run the actual build. At this point, code is less trusted, and we disable network access.
-            nspawn_flags = ['--bind={}:/srv/build/'.format(pkg_dir), '-u', 'builder', '--private-network']
+            # nspawn_flags = bind_mount_flags(pkg_dir, source_pkg_dir)
+            nspawn_flags += ['-u', 'builder', '--private-network']
             helper_flags = ['--build-run']
             helper_flags.extend(['--suite', osbase.suite])
             if buildflags:
@@ -284,7 +291,7 @@ def internal_execute_build(
                 # running Lintian was requested, so do so.
                 # we use Lintian from the container, so we validate with the validator from
                 # the OS the package was actually built against
-                nspawn_flags = ['--bind={}:/srv/build/'.format(pkg_dir)]
+                nspawn_flags = ['--bind={}:{}/'.format(pkg_dir, BUILD_DIR)]
                 r = nspawn_run_helper_persist(
                     osbase,
                     instance_dir,
@@ -410,6 +417,35 @@ def _print_system_info():
     )
 
 
+# return False on error
+def create_source_package(pkg_dir, clean_source):
+    with cd(pkg_dir):
+        with switch_unprivileged():
+            deb_files_fname = os.path.join(pkg_dir, 'debian', 'files')
+            if os.path.isfile(deb_files_fname):
+                deb_files_fname = None  # the file already existed, we don't need to clean it up later
+
+            # fixme: this creates source package:
+            cmd = ['dpkg-buildpackage', '-S', '--no-sign']
+            # d/rules clean requires build dependencies installed if run on the host
+            # we avoid that by default, unless explicitly requested
+            if not clean_source:
+                cmd.append('-nc')
+
+            proc = subprocess.run(cmd, check=False)
+            if proc.returncode != 0:
+                return False
+
+            # remove d/files file that was created when generating the source package.
+            # we only clean up the file if it didn't exist prior to us running the command.
+            if deb_files_fname:
+                try:
+                    os.remove(deb_files_fname)
+                except OSError:
+                    pass
+            return True
+
+
 def build_from_directory(
     osbase,
     pkg_dir,
@@ -449,60 +485,51 @@ def build_from_directory(
     _print_system_info()
     print_header('Package build (from directory)')
 
-    print_section('Creating source package')
+    create_source_package = False
     with cd(pkg_dir):
         with switch_unprivileged():
-            deb_files_fname = os.path.join(pkg_dir, 'debian', 'files')
-            if os.path.isfile(deb_files_fname):
-                deb_files_fname = None  # the file already existed, we don't need to clean it up later
-
             pkg_sourcename, pkg_version, dsc_fname = _read_source_package_details()
+
             if not pkg_sourcename:
                 return False
+            if create_source_package:
+                print_section('Creating source package')
+                if not create_source_package(pkg_dir, clean_source):
+                    return False
 
-            cmd = ['dpkg-buildpackage', '-S', '--no-sign']
-            # d/rules clean requires build dependencies installed if run on the host
-            # we avoid that by default, unless explicitly requested
-            if not clean_source:
-                cmd.append('-nc')
-
-            proc = subprocess.run(cmd, check=False)
-            if proc.returncode != 0:
-                return False
-
-            # remove d/files file that was created when generating the source package.
-            # we only clean up the file if it didn't exist prior to us running the command.
-            if deb_files_fname:
-                try:
-                    os.remove(deb_files_fname)
-                except OSError:
-                    pass
-
-    print_header('Package build')
-    print_build_detail(osbase, pkg_sourcename, pkg_version)
+            print_header('Package build')
+            print_build_detail(osbase, pkg_sourcename, pkg_version)
 
     success = False
-    with temp_dir(pkg_sourcename) as pkg_tmp_dir:
-        with cd(pkg_tmp_dir):
-            cmd = ['dpkg-source', '-x', os.path.join(pkg_dir, '..', dsc_fname)]
-            proc = subprocess.run(cmd, check=False)
-            if proc.returncode != 0:
-                return False
+    with temp_dir(pkg_sourcename) if create_source_package else nullcontext() as pkg_tmp_dir:
+        if create_source_package:
+            with cd(pkg_tmp_dir):
+                # mmc: so we use the just-created source package:
+                cmd = ['dpkg-source', '-x', os.path.join(pkg_dir, '..', dsc_fname)]
+                proc = subprocess.run(cmd, check=False)
+                if proc.returncode != 0:
+                    return False
+        # mmc:  here we descend into the real binary build?
+        with temp_dir(pkg_dir) as artifacts_dir: # does it make a suffix?
+            # fixme! is this also for the `create_source_package' case?
 
-        success = internal_execute_build(
-            osbase,
-            pkg_tmp_dir,
-            build_only,
-            qa_lintian=qa_lintian,
-            interact=interact,
-            source_pkg_dir=pkg_dir,
-            buildflags=buildflags,
-            build_env=build_env,
-        )
+            success = internal_execute_build(
+            # the container base?
+                osbase,
+                # mmc: we pass the temp dir or the real source dir:
+                pkg_tmp_dir if create_source_package else artifacts_dir,
+                # pkg_tmp_dir,
+                build_only,
+                qa_lintian=qa_lintian,
+                interact=interact,
+                source_pkg_dir=pkg_dir, # original one
+                buildflags=buildflags,
+                build_env=build_env,
+                )
 
-        # copy build results
-        if success:
-            osbase.retrieve_artifacts(pkg_tmp_dir)
+            # copy build results
+            if success:
+                osbase.retrieve_artifacts(artifacts_dir)
 
     # save buildlog, if we generated one
     log_fname = os.path.join(
