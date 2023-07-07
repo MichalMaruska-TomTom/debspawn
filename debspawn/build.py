@@ -529,6 +529,13 @@ def build_from_directory(
                 build_env=build_env,
                 )
 
+            if not create_source_package:
+                o_uid, o_gid = get_owner_uid_gid()
+                # with cd(pkg_dir):
+                cmd = ['sudo', 'chown', '--recursive',
+                    '{}:{}'.format(o_uid, o_gid), pkg_dir ]
+                proc = subprocess.run(cmd, check=False)
+
             # copy build results
             if success:
                 osbase.retrieve_artifacts(artifacts_dir)
