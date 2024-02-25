@@ -1,3 +1,23 @@
+debspawn (0.6.4-maruska) unstable; urgency=medium
+
+  * extract create_source_package()
+  * Create source package conditionally
+  * verbose
+  * dsrun, build: use BUILD_DIR instead of /srv/build
+  * dsrun: extract chdir_to_build & not BUILD_DIR/package-name
+  * Expect the package sources to be inside BUILD_DIR
+  * dsrun: assign permission to builder on the parent of BUILD_dir
+  * dsrun: expect the sources in BUILD_DIR/package
+  * verbose before Popen
+  * spy more on how nspawn is invoked
+  * bind-mount 1 more directory for artifacts BUILD/package -- and retrieve from there
+  * verbose
+  * fix permissions after the build, from outside the container.
+  * fix typo
+  * verbose the bootstrap command?
+
+ -- Michal Maruska <mmaruska@gmail.com>  Sun, 25 Feb 2024 19:02:33 +0100
+
 debspawn (0.6.2-1) unstable; urgency=medium
 
   * New upstream bugfix release: 0.6.2
